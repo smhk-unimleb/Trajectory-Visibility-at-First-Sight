@@ -89,7 +89,6 @@ bool is_visible_naive(const Polygon& P, Point q, Point r) {
             bool query_endpoint = (q == edge.p1 || q == edge.p2 || r == edge.p1 || r == edge.p2);
             if (query_endpoint) continue;
 
-            // FIX for T-Junctions (Test failure t=8.0 vs 4.0):
             // If the query segment passes exactly through a polygon vertex, it is a "touch", not a block.
             // (Unless it creates a strict exterior crossing, but `is_point_in_polygon(mid)` handles gross exterior cases).
             if (on_segment(edge.p1, query_seg) || on_segment(edge.p2, query_seg)) {
