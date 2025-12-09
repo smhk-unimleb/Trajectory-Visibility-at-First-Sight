@@ -4,19 +4,18 @@
 #include "geometry.h"
 #include <vector>
 
-// Implements the Linear Time O(N) Funnel/String-Pulling algorithm.
-// Computes the 'taut string' visibility path inside P.
-// This identifies the exact topological constraints (Reflex Vertices) required 
-// to build the Splinegon Diagram boundaries.
 class LinearShortestPath {
     const Polygon& P;
+    bool ccw_winding; // Stored winding order
 
 public:
-    explicit LinearShortestPath(const Polygon& poly) : P(poly) {}
+    explicit LinearShortestPath(const Polygon& poly);
 
-    // Computes path from Start -> End using Deque-based monotonic chain reduction.
-    // Complexity: Strict O(n) (Each vertex pushed/popped at most twice).
+    // Computes the path using the "Rubberband Algorithm" (String Pulling).
+    // It extracts the polygon boundary chain between start/end and relaxes it
+    // against the reflex vertices.
+    // Complexity: O(n).
     std::vector<Point> compute(Point start, Point end) const;
 };
 
-#endif // TV_LINEAR_SHORTEST_PATH_H
+#endif

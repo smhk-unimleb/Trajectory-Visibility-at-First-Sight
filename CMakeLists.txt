@@ -28,6 +28,7 @@ add_library(tv_core
         src/linear_shortest_path.cpp src/linear_shortest_path.h
         src/splinegon.cpp src/splinegon.h
         src/linear_shortest_path.h
+        src/linear_shortest_path.cpp
 )
 target_include_directories(tv_core PUBLIC src)
 
