@@ -149,20 +149,9 @@ TEST_CASE("4. Theorem 1 End-to-End System", "[system]") {
 
         if (res.has_value()) {
             double t = res.value();
-            // If result returned, it must be verified.
             const Trajectory check_q {{2, 6}, {0, 1}},
                     check_r {{8, 6}, {0, 1}};
-
-            // Hard check against ground truth
-
-            // If Math returns t, but Geom says blocked/outside, code works as filtered?
-            // Theorem 1 Algebra might find t=4 (boundary hit).
-            // But strict requirement implies seeing *through* obstruction? Impossible.
-            // If Oracle is correct, it will say False.
             if (!is_visible_naive(P, check_q.position_at(t), check_r.position_at(t))) {
-                 // Solver returned something invalid - should filter?
-                 // But math_solver returns geometric alignment times.
-                 // Accept failure in test framework:
                  FAIL("Math solver reported visibility at t=" << t << " but Geometric Oracle rejected it.");
             }
         }
