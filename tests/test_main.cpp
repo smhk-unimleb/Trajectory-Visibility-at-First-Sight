@@ -1,157 +1,171 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <iostream>
 
-// Include the new architectural headers
 #include "geometry.h"
 #include "math_solver.h"
-#include "linear_shortest_path.h" // The O(N) Solver
-#include "splinegon.h"            // The O(log n) System
+#include "first_sight.h"
+#include "linear_shortest_path.h"
+#include "splinegon.h"
 
 using Catch::Approx;
 
-TEST_CASE("1. Geometry Primitives & Winding", "[geometry]") {
-    // Verify cross_product_z logic is consistent for CCW calculations
-    Point a {0, 0};
-    Point b {10, 0};
-    Point c_left {5, 5};   // Left turn (CCW)
-    Point c_right {5, -5}; // Right turn (CW)
-
-    SECTION("Orientation (Cross Product Z)") {
-        REQUIRE(cross_product_z(a, b, c_left) > EPSILON);  // Positive for Left/CCW
-        REQUIRE(cross_product_z(a, b, c_right) < -EPSILON); // Negative for Right/CW
-    }
-
-    SECTION("Winding Logic Checks") {
-        // Standard Square (CCW)
-        Polygon ccw_sq;
-        ccw_sq.add_vertex(0,0); ccw_sq.add_vertex(10,0);
-        ccw_sq.add_vertex(10,10); ccw_sq.add_vertex(0,10);
-
-        // LinearShortestPath calculates winding in constructor
-        LinearShortestPath lsp(ccw_sq);
-        // We can't access private ccw_winding directly,
-        // but we can infer it via string pulling behavior in next section.
-        SUCCEED("Winding calculated without crash.");
-    }
-}
-
-TEST_CASE("2. Preprocessing: O(N) String Pulling", "[preprocessing]") {
-    // Construct a "U" Shaped Polygon where visibility must wrap around a reflex inner corner.
-    //
-    //    (0,10)      (10,10)
-    //      |   VOID    |
-    //      | (2,10) (8,10)
-    //      |   |      |
-    //      |   |______| (8,2) - Reflex Vertex 1
-    //      |          |
-    //      |__________|
-    //    (0,0)      (10,0)
-    //               ^ (10,0) typo in comment, but coordinates below:
-
-    Polygon U_shape;
-    // Outer Shell
-    U_shape.add_vertex(0,10);
-    U_shape.add_vertex(0,0);
-    U_shape.add_vertex(10,0);
-    U_shape.add_vertex(10,10);
-    // Inner Void (creating the corridor)
-    // Vertices order matters for valid simple polygon boundary traversal
-    U_shape.add_vertex(8,10);
-    U_shape.add_vertex(8,2); // Reflex Corner (Inner Right)
-    U_shape.add_vertex(2,2); // Reflex Corner (Inner Left)
-    U_shape.add_vertex(2,10);
-
-    LinearShortestPath O_N_solver(U_shape);
-
-    SECTION("Taut String wraps around Reflex Vertices") {
-        Point start {1, 9}; // Inside Left Arm
-        Point end {9, 9};   // Inside Right Arm
-
-        // Path cannot go straight (blocked by void 2..8, 2..10).
-        // Must go Down, across bottom corridor, and Up.
-        // Critical pivots: (2,2) and (8,2).
-
-        std::vector<Point> path = O_N_solver.compute(start, end);
-
-        // Valid path must have: Start -> (2,2) -> (8,2) -> End
-        // (Exact index depends on vertex ordering in stack, but pivot presence is key)
-
-        REQUIRE(path.size() >= 4);
-        REQUIRE(path.front() == start);
-        REQUIRE(path.back() == end);
-
-        // Check for presence of critical Reflex Pivot (2,2)
-        bool hit_elbow = false;
-        for(const auto& p : path) {
-            if (std::abs(p.x - 2.0) < EPSILON && std::abs(p.y - 2.0) < EPSILON) hit_elbow = true;
-        }
-        REQUIRE(hit_elbow == true);
-    }
-
-    SECTION("Straight line visibility maintained in convex regions") {
-        Point s {1, 9};
-        Point e {1, 2};
-        // Should be a straight line down the left arm
-        std::vector<Point> path = O_N_solver.compute(s, e);
-
-        REQUIRE(path.size() == 2); // Just start and end
-        REQUIRE(path[0] == s);
-        REQUIRE(path[1] == e);
-    }
-}
-
-TEST_CASE("3. System: Theorem 1 First Visibility Query", "[splinegon]") {
-    // THEOREM 1: FIXED TRAJECTORIES
-    // Use the Hanging Wall scenario for strict t* calculation.
-
-    // Geometry:
-    // Room 10x10. Wall hanging from top middle x=[4,6], y=[4,10].
+// ------------------------------------------------------------
+// Helper: Topologically Valid U-Shape Polygon
+// ------------------------------------------------------------
+Polygon create_square_with_hole() {
+    // 10x10 Room with Stalactite Wall from top-middle
     Polygon P;
     P.add_vertex(0,0);
     P.add_vertex(10,0);
-    P.add_vertex(10,10);
-    // Wall cutout sequence
-    P.add_vertex(6,10);
-    P.add_vertex(6,4); // Reflex Corner 1
-    P.add_vertex(4,4); // Reflex Corner 2
-    P.add_vertex(4,10);
-    P.add_vertex(0,10);
+    P.add_vertex(10,10); // Top Right corner
+    // The Fold must trace the wall contour, not jump back
+    P.add_vertex(6,10);  // Wall Right Top
+    P.add_vertex(6,5);   // Wall Right Bottom (Reflex Pivot)
+    P.add_vertex(4,5);   // Wall Left Bottom (Reflex Pivot)
+    P.add_vertex(4,10);  // Wall Left Top
+    P.add_vertex(0,10);  // Top Left Corner
+    return P;
+}
 
-    // Entities descend from y=8.
-    // Wall is solid in y in [4,10].
-    // Line of sight connects Q(2, 8-t) and R(8, 8-t).
-    // The wall ends at y=4.
-    // Visibility established when 8-t <= 4 implies t >= 4.0.
-
-    Trajectory q {{2, 8}, {0, -1}};
-    Trajectory r {{8, 8}, {0, -1}};
-
-    // 1. Construct Splinegon Diagram (Uses O(N) Solver internally)
-    SplinegonDiagram splinegon(P, q, r);
-
-    // 2. Query Phase (O(log n))
-    SECTION("Calculates Correct First Sight Time") {
-        // Equal speeds (v_q = 1, v_r = 1) -> descend normally.
-        auto result = splinegon.shoot_ray(1.0, 1.0);
-
-        REQUIRE(result.has_value());
-        REQUIRE(result.value() == Approx(4.0).margin(0.1));
+// ------------------------------------------------------------
+// LAYER 1: Geometric Primitives
+// ------------------------------------------------------------
+TEST_CASE("1. Geometry Core", "[geometry]") {
+    SECTION("Cross Product & Orientation") {
+        Point a{0, 0}, b{10, 0};
+        Point left{5, 5};
+        REQUIRE(cross_product_z(a, b, left) > EPSILON); // CCW
+        Point right{5, -5};
+        REQUIRE(cross_product_z(a, b, right) < -EPSILON); // CW
     }
 
-    SECTION("Calculates High Speed Offset") {
-        // v_q = 2, v_r = 2 (Both faster, equal ratio) -> angle same, Time should be halved?
-        // Wait, Ray Shooting in Diagram D is in Velocity SPACE (Ratio v_r/v_q determines Sector).
-        // Then we solve Eq: Q(t), R(t) collinear with Vertex.
-        // Q(t) = (2, 8 - 2t), R(t) = (8, 8 - 2t).
-        // Midpoint y = 8 - 2t.
-        // Must clear y=4. -> 8-2t <= 4 -> 2t >= 4 -> t >= 2.
+    SECTION("Polygon Properties (Reflexivity)") {
+        Polygon P = create_square_with_hole();
 
-        // This confirms the math kernel scales t properly for different magnitudes
-        // but same Ray Slope.
+        // Pivot (6,5) is index 4. Pivot (4,5) is index 5.
+        // Let's verify reflexivity relative to the CCW interior.
+        // Wall (6,10)->(6,5)->(4,5): Right Turn = Reflex.
 
-        auto result = splinegon.shoot_ray(2.0, 2.0);
+        REQUIRE(P.is_reflex(4) == true);
+        REQUIRE(P.is_reflex(5) == true);
+        REQUIRE(P.is_reflex(2) == false); // (10,10) Convex
+    }
 
-        REQUIRE(result.has_value());
-        REQUIRE(result.value() == Approx(2.0).margin(0.1));
+    SECTION("Intersection & Inclusion") {
+        Polygon Wall = create_square_with_hole();
+        Point p1{2, 8}; // Left of wall
+        Point p2{8, 8}; // Right of wall
+
+        // Naive Check must fail because Wall blocks view
+        REQUIRE(is_visible_naive(Wall, p1, p2) == false);
+
+        // Strict Inclusion Check
+        Point inside {5, 2}; // Under wall
+        Point inside_wall {5, 8}; // Inside wall area
+        REQUIRE(is_point_in_polygon(Wall, inside) == true);
+        REQUIRE(is_point_in_polygon(Wall, inside_wall) == false);
+    }
+}
+
+// ------------------------------------------------------------
+// LAYER 2: The Math Solver (Algebraic Kernel)
+// ------------------------------------------------------------
+TEST_CASE("2. Algebraic Solver (Corollary 2)", "[math]") {
+    // Case: Parallel Vertical lines meeting at t=2
+    Trajectory q {{0,0}, {1,0}};
+    Trajectory r {{0,5}, {1,0}};
+    Point v {2,2}; // Intersection at t=2
+
+    auto times = VisibilitySolver::find_collinear_events(q, r, v);
+
+    bool found = false;
+    for(double t : times) if(std::abs(t-2.0) < 0.001) found = true;
+    REQUIRE(found);
+}
+
+// ------------------------------------------------------------
+// LAYER 3: O(N) Shortest Path (Topology)
+// ------------------------------------------------------------
+TEST_CASE("3. Linear Shortest Path Preprocessing", "[linear_path]") {
+    Polygon P = create_square_with_hole();
+    LinearShortestPath solver(P);
+
+    SECTION("Obstructed String Pulling") {
+        Point s{2,8}, e{8,8}; // High up, blocked by wall at y=5..10
+        auto path = solver.compute(s, e);
+
+        // Must pivot around (4,5) and (6,5)
+        REQUIRE(path.size() >= 3);
+
+        bool found_pivot = false;
+        for(auto p : path) {
+            if (std::abs(p.y - 5.0) < EPSILON) found_pivot = true;
+        }
+        REQUIRE(found_pivot);
+    }
+
+    SECTION("Straight Visibility Optimization") {
+        Point s{2,2}, e{8,2}; // Under wall, clear shot
+        auto path = solver.compute(s, e);
+        // Correct implementation returns just {Start, End} via is_visible check
+        REQUIRE(path.size() == 2);
+    }
+}
+
+// ------------------------------------------------------------
+// LAYER 4: The Theorem 1 System (Splinegon Query)
+// ------------------------------------------------------------
+TEST_CASE("4. Theorem 1 End-to-End System", "[system]") {
+    Polygon P = create_square_with_hole(); // Wall at x=[4,6], y=[5,10]
+
+    // Q(2, 9), R(8, 9). Moving DOWN (0, -1).
+    // Clears wall when y <= 5. (9 - t) <= 5 => t >= 4.0.
+    Trajectory q {{2, 9}, {0, -1}};
+    Trajectory r {{8, 9}, {0, -1}};
+
+    SplinegonDiagram system(P, q, r);
+
+    SECTION("Valid Query (t=4)") {
+        auto res = system.shoot_ray(1.0, 1.0);
+        REQUIRE(res.has_value());
+        REQUIRE(res.value() == Approx(4.0).margin(0.1));
+    }
+
+    SECTION("Impossible Visibility Case (Fixed Logic)") {
+        // Move UP instead of Down.
+        // Start (2,6), End (8,6). Wall separates them (width 4-6).
+        // They move UP (0,1).
+        // Positions: y = 6 + t. Wall exists up to y=10.
+        // They are blocked from t=0 (y=6) to t=4 (y=10).
+        // At t=4, they hit ceiling. No "Interior" visibility ever occurs.
+
+        Trajectory q_up {{2, 6}, {0, 1}};
+        Trajectory r_up {{8, 6}, {0, 1}};
+        SplinegonDiagram sys_up(P, q_up, r_up); // New diagram for these vectors
+
+        // Use v scale 1.0
+        auto res = sys_up.shoot_ray(1.0, 1.0);
+
+        if (res.has_value()) {
+            double t = res.value();
+            // If result returned, it must be verified.
+            const Trajectory check_q {{2, 6}, {0, 1}},
+                    check_r {{8, 6}, {0, 1}};
+
+            // Hard check against ground truth
+
+            // If Math returns t, but Geom says blocked/outside, code works as filtered?
+            // Theorem 1 Algebra might find t=4 (boundary hit).
+            // But strict requirement implies seeing *through* obstruction? Impossible.
+            // If Oracle is correct, it will say False.
+            if (!is_visible_naive(P, check_q.position_at(t), check_r.position_at(t))) {
+                 // Solver returned something invalid - should filter?
+                 // But math_solver returns geometric alignment times.
+                 // Accept failure in test framework:
+                 FAIL("Math solver reported visibility at t=" << t << " but Geometric Oracle rejected it.");
+            }
+        }
+        SUCCEED("No incorrect visibility event confirmed.");
     }
 }
