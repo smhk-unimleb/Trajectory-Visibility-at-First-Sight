@@ -60,7 +60,7 @@ double dist_sq(Point a, Point b);
 
 // Intersection tests
 bool on_segment(const Point& p, const Segment &s);
-bool segments_intersect(Segment s1, Segment s2);
+bool segments_intersect(const Segment &s1, const Segment &s2);
 
 // Polygon inclusion and visibility
 bool is_point_in_polygon(const Polygon& P, const Point& p);
